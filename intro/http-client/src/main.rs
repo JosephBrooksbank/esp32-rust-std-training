@@ -44,23 +44,87 @@ fn main() -> Result<()> {
 
 fn get(url: impl AsRef<str>) -> Result<()> {
     // 1. Create a new EspHttpConnection with default Configuration. (Check documentation)
+    let http_connection = EspHttpConnection::new(&Configuration::default()).unwrap();
 
     // 2. Get a client using the embedded_svc Client::wrap method. (Check documentation)
+    let mut http_client = Client::wrap(http_connection);
 
     // 3. Open a GET request to `url`
     let headers = [("accept", "text/plain")];
+    let request = http_client
+        .request(Method::Get, url.as_ref(), &headers)
+        .unwrap();
 
     // 4. Submit the request and check the status code of the response.
     // let response = request...;
+    let response = request.submit().unwrap();
+    let status = response.status();
     // let status = ...;
-    // println!("Response code: {}\n", status);
-    // match status {
-    // Successful http status codes are in the 200..=299 range.
+    println!("Response code: {}\n", status);
 
-    // 5. If the status is OK, read response data chunk by chunk into a buffer and print it until done.
+    match status {
+        // Successful http status codes are in the 200..=299 range.
+        200..=299 => {
+            // 5. If the status is OK, read response data chunk by chunk into a buffer and print it until done.
 
-    // 6. Try converting the bytes into a Rust (UTF-8) string and print it.
-    // }
+            let mut total = 0;
+            let mut buf = [0_u8; 256];
+            let mut offset = 0;
+            let mut reader = response;
+            loop {
+                let num_bytes = Read::read(&mut reader, &mut buf[offset..]);
+                match num_bytes {
+                    Ok(size) => {
+                        // A return of Ok(0) indicates the reader has nothing left
+                        if size == 0 {
+                            break;
+                        }
+                        // track number of bytes read
+                        total += size;
+
+                        // attempt to read from buffer from start -> end of data as indicated by
+                        // reader for current amount, into utf characters.
+
+                        // we also need to include the offset from the past read incase there were
+                        // any partial characters
+                        let size_plus_offset = size + offset;
+                        match str::from_utf8(&buf[..size]) {
+                            Ok(text) => {
+                                print!("{}", text);
+                            }
+                            Err(error) => {
+                                // The buffer contains invalid UTF data. This could be either
+                                // due to the data being actual bad data, or maybe the reader
+                                // only returned part of a valid UTF character, or some valid
+                                // characters and then an invalid character.
+                                // note- at this point I miss arduino httpClient which Just Works 😭
+                                let valid_up_to = error.valid_up_to();
+
+                                unsafe {
+                                    // my first unsafe block! the error code already told us that
+                                    // the UTF data up to this index is valid, so we can tell the
+                                    // compiler it's fine. Another option would be to match again
+                                    // but the error case of that match would never run, unless the
+                                    // std lib str code is wrong, at which case we have bigger
+                                    // problems
+                                    print!("{}", str::from_utf8_unchecked(&buf[..valid_up_to]));
+                                }
+                                // move the invalid data to the start of the buffer, maybe to be
+                                // combined with the next read
+                                buf.copy_within(valid_up_to.., 0);
+                                // set the offset for the next write so we don't overwrite this
+                                // parital data
+                                offset = size_plus_offset - valid_up_to;
+                            }
+                        }
+                    }
+                    Err(_) => bail!("Uh oh"),
+                }
+            }
+            println!("Total: {} bytes", total);
+        }
+        _ => bail!("Unexpected response code: {}", status),
+    }
 
     Ok(())
 }
