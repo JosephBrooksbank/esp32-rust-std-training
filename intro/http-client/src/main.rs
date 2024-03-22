@@ -8,7 +8,9 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::prelude::Peripherals,
     http::client::{Configuration, EspHttpConnection},
+    log,
 };
+use std::u16;
 use wifi::wifi;
 
 #[toml_cfg::toml_config]
@@ -17,6 +19,29 @@ pub struct Config {
     wifi_ssid: &'static str,
     #[default("")]
     wifi_psk: &'static str,
+}
+
+#[derive(Debug)]
+enum HttpError {
+    Redirection(u16),
+    Client(u16),
+    Server(u16),
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::Redirection(code) => write!(f, "{} Redirection", code),
+            Self::Client(code) => write!(f, "{} Client Error", code),
+            Self::Server(code) => write!(f, "{} Server Error!", code),
+        }
+    }
+}
+
+impl std::error::Error for HttpError {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        self.source()
+    }
 }
 
 fn main() -> Result<()> {
@@ -42,7 +67,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn get(url: impl AsRef<str>) -> Result<()> {
+fn get(url: impl AsRef<str>) -> anyhow::Result<()> {
     // 1. Create a new EspHttpConnection with default Configuration. (Check documentation)
     let http_connection = EspHttpConnection::new(&Configuration::default()).unwrap();
 
@@ -122,6 +147,13 @@ fn get(url: impl AsRef<str>) -> Result<()> {
                 }
             }
             println!("Total: {} bytes", total);
+        }
+        300..=399 => {
+            bail!(HttpError::Redirection(status))
+        }
+        400..=499 => bail!(HttpError::Client(status)),
+        500..=599 => {
+            bail!(HttpError::Server(status))
         }
         _ => bail!("Unexpected response code: {}", status),
     }
